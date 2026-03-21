@@ -37,11 +37,9 @@ def generate_causal_mask(seq_len, device):
 class DecoderLayer(nn.Module):
     def __init__(self, d_model, d_ff=256, dropout=0.1, activation="gelu"):
         super().__init__()
-        # Self-Attention 
-        # self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+
         self.self_attn_linear = nn.Linear(d_model, d_model)
-        # Cross-Attention
-        # self.cross_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+ 
         self.cross_attn_linear = nn.Linear(d_model, d_model)
         
         self.norm1 = nn.LayerNorm(d_model)
@@ -59,12 +57,12 @@ class DecoderLayer(nn.Module):
         cross: [Batch, Seq_Len, D_Model] (Encoder Output)
         mask: [Seq_Len, Seq_Len] (Self-Only Mask)
         """
-        # 1. Self-Attention with Self-Only Mask
+        
         # src, _ = self.self_attn(x, x, x, attn_mask=mask, need_weights=False)
         src = self.self_attn_linear(x)
         x = self.norm1(x + self.dropout(src))
 
-        # 2. Cross-Attention with Self-Only Mask (点对点恢复)
+       
         # src, _ = self.cross_attn(x, cross, cross, attn_mask=mask, need_weights=False)
         src = self.cross_attn_linear(cross)
         x = self.norm2(x + self.dropout(src))
@@ -159,7 +157,7 @@ class Flight_MoE(nn.Module):
         输出: [B, P] 每条输入轨迹到每条代表轨迹的距离
         """
         
-        # 调整representative_trajs的维度以匹配X_input
+       
         # representative_trajs: [P, S, F] -> [P, F, S] -> [1, 1, P, F, S]
         rep_trajs = representative_trajs.permute(0, 2, 1)  # [P, F, S]
         
@@ -167,11 +165,11 @@ class Flight_MoE(nn.Module):
         # rep_trajs: [P, F, S] -> [1, 1, P, F, S]
         diff = X_input[:, :, None, :, :] - rep_trajs[None, None, :, :, :]  # [B, N, P, F, S]
         
-        # 对特征维度F求norm（保持与原始版本一致）
-        dists = torch.norm(diff, dim=-2)  # [B, N, P, S] - 对特征维度F求norm
         
-        # 然后对patch长度维度S和patch个数维度N取平均
-        dists = dists.mean(dim=-1)  # [B, N ,P] - 对S和N取平均
+        dists = torch.norm(diff, dim=-2)  # [B, N, P, S] - 
+        
+       
+        dists = dists.mean(dim=-1)  # [B, N ,P] - 
         
         return dists.to(torch.float32)
         
@@ -195,7 +193,7 @@ class Flight_MoE(nn.Module):
             # 4. Decoder Input (Linear) 
             t_emb = t_emb_flat.view(bs * n_vars, actual_num_patch, -1)
 
-            # 还原形状: [B, N, V, L]
+           
             z_noisy = z_noisy_flat.reshape(bs, n_vars, actual_num_patch, patch_len).permute(0, 2, 1, 3)
             # dec_input: [bs * n_vars, num_patch, d_model]
             dec_input = self.backbone.embed(z_noisy, patch_indices)
@@ -219,12 +217,12 @@ class Flight_MoE(nn.Module):
             if x_vel is not None:
                 # [bs x num_patch x n_vars x patch_len] -> [bs x num_patch x n_vars x d]
                 acc_feat = self.acc_embedding(x_vel)
-                # 非线性增强
+                
                 acc_feat = self.acc_projector(acc_feat)
                 #[B, N, V, D] -> [B, V, D, N] (为了匹配 backbone_feat)
                 acc_feat = acc_feat.permute(0, 2, 3, 1)
 
-                # 拼接: [B, V, 2D, N]
+                
                 combined_acc = torch.cat([backbone_feat, acc_feat], dim=2)
                 gate_input = combined_acc.permute(0, 1, 3, 2)
                 gate_acc = self.acc_fusion_gate(gate_input) # -> [B, V, N, D]
@@ -232,41 +230,40 @@ class Flight_MoE(nn.Module):
 
                 backbone_feat = backbone_feat + gate_acc * acc_feat
             if hasattr(self, 'representative_trajs'):
-                # --- MoE 计算 (原始空间) ---
+                
                 representative_trajs = self.representative_trajs.to(device=z.device, dtype=z.dtype)
                 
-                # 计算距离 (用归一化后的原始数据 trans_norm_z)
+               
                 dists = self.compute_simple_spd(trans_norm_z, representative_trajs) # [B, N, P]
                 weights = F.softmax(-dists, dim=-1) # [B, N, P]
                 
-                # 计算 Mixture (原始轨迹) -> [B, N, F, S] (S=patch_len)
+               
                 mixture = torch.einsum("bnp,psf->bnfs", weights, representative_trajs)
                 
-                # --- 投影与对齐 (关键步骤) ---
+                
                 # mixture: [B, N, F, S] -> 投影 -> [B, N, F, D] (D=d_model)
                 mixture_feat = self.mixture_projection(mixture)
                 
-                # 调整 mixture_feat 形状以匹配 backbone_feat: 
+               
                 # [B, N, F, D] -> [B, F, D, N] (Batch, nvars, d_model, num_patch)
                 mixture_feat = mixture_feat.permute(0, 2, 3, 1)
                 
-                # --- 特征融合 ---
-                # 在 Channel 维度 (dim=2, 即 d_model) 拼接
+               
                 # backbone_feat: [B, F, D, N]
                 # mixture_feat:  [B, F, D, N]
                 combined = torch.cat([backbone_feat, mixture_feat], dim=2) 
                 
-                # 为了过 Linear 层 (fusion_gate)，我们需要把 D 维度放到最后
+                
                 # combined: [B, F, D*2, N] -> permute -> [B, F, N, D*2]
                 combined_perm = combined.permute(0, 1, 3, 2)
                 
-                # 计算门控: [B, F, N, D]
+                
                 gate = self.fusion_gate(combined_perm)
                 
-                # 门控变回: [B, F, D, N]
+                
                 gate = gate.permute(0, 1, 3, 2)
                 
-                # 执行加权融合
+               
                 z_fused = (1 - gate) * backbone_feat + gate * mixture_feat
             else:
                 z_fused = backbone_feat
