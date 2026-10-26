@@ -86,7 +86,7 @@ class ProjectorDecoder(nn.Module):
         return x
             
 # Cell
-class Flight_MoE(nn.Module):
+class FlightProto(nn.Module):
     def __init__(self, c_in:int, target_dim:int, patch_len:int, stride:int, num_patch:int, 
                  n_layers:int=3, d_model=128, n_heads=16, shared_embedding=True, d_ff:int=256, 
                  norm:str='BatchNorm', attn_dropout:float=0., dropout:float=0., act:str="gelu", 
